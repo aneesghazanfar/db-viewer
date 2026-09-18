@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DRAP Database Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #eef2f4;
+      --surface: #ffffff;
+      --sidebar: #10233a;
+      --sidebar-2: #0c1b2d;
+      --sidebar-text: #e8eef6;
+      --sidebar-muted: #93a4bb;
+      --sidebar-hover: rgba(255, 255, 255, 0.06);
+      --sidebar-active: #1a4d45;
+      --line: #d7dee6;
+      --text: #152033;
+      --muted: #5d6b7d;
+      --accent: #0b6e4f;
+      --accent-hover: #095c42;
+      --accent-soft: #e8f5ef;
+      --danger: #b42318;
+      --danger-soft: #fef3f2;
+      --pk: #5b3cc4;
+      --null: #98a2b3;
+      --shadow: 0 1px 2px rgba(16, 35, 58, 0.06), 0 8px 24px rgba(16, 35, 58, 0.06);
+      --radius: 10px;
+      --mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg);
+      display: grid;
+      grid-template-columns: var(--sidebar-width, 312px) 1fr;
+      grid-template-rows: 64px 1fr;
+      min-width: 720px;
+      transition: grid-template-columns 0.18s ease;
+    }
+    body.sidebar-collapsed { --sidebar-width: 0px; }
+    header {
+      grid-column: 1 / -1;
+      background: linear-gradient(180deg, #12324a 0%, #10233a 100%);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      gap: 16px;
+      border-bottom: 3px solid var(--accent);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      letter-spacing: -0.02em;
+    }
+    .brand-copy { display: flex; flex-direction: column; line-height: 1.15; }
+    .brand-copy strong { font-size: 15px; font-weight: 700; }
+    .brand-copy span { font-size: 11px; color: #b7c6d8; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      box-shadow: inset 0 -1px 0 rgba(0,0,0,0.15);
+    }
+    .brand-mark svg { width: 18px; height: 18px; }
+    .conn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d5deea;
+      font-size: 12px;
+      font-family: var(--mono);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 999px;
+      padding: 6px 12px;
+      max-width: min(560px, 48vw);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #f97066; flex: 0 0 auto; box-shadow: 0 0 0 4px rgba(249, 112, 102, 0.18); }
+    .dot.ok { background: #32d583; box-shadow: 0 0 0 4px rgba(50, 213, 131, 0.18); }
+    aside {
+      background: var(--sidebar);
+      color: var(--sidebar-text);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      border-right: 1px solid #0a1624;
+    }
+    .icon-btn {
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      flex: 0 0 auto;
+      border-radius: 8px;
+    }
+    .icon-btn:hover { background: rgba(255,255,255,0.14); }
+    .icon-btn.dark {
+      background: var(--sidebar-2);
+      border-color: #2a3d57;
+      color: var(--sidebar-text);
+    }
+    .icon-btn.dark:hover { background: var(--sidebar-hover); }
+    .chevron {
+      width: 7px;
+      height: 7px;
+      border-left: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(45deg);
+      margin-left: 2px;
+    }
+    body.sidebar-collapsed .chevron {
+      transform: rotate(225deg);
+      margin-left: 0;
+      margin-right: 2px;
+    }
+    .side-search {
+      padding: 14px 12px;
+      border-bottom: 1px solid #1c314b;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: var(--sidebar-2);
+    }
+    .side-search input {
+      width: 100%;
+      min-width: 0;
+      flex: 1;
+      background: #0a1624;
+      border: 1px solid #2a3d57;
+      color: var(--sidebar-text);
+      padding: 9px 11px;
+      font: 13px var(--sans);
+      outline: none;
+      border-radius: 8px;
+    }
+    .side-search input::placeholder { color: #7d8ea4; }
+    .side-search input:focus { border-color: #3d9b75; box-shadow: 0 0 0 3px rgba(11, 110, 79, 0.25); }
+    .object-list { overflow: auto; flex: 1; padding: 8px 0 24px; }
+    .schema-label {
+      padding: 14px 14px 6px;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--sidebar-muted);
+      font-weight: 650;
+    }
+    .obj {
+      width: calc(100% - 12px);
+      margin: 1px 6px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: 13px var(--sans);
+      text-align: left;
+      cursor: pointer;
+      border-radius: 8px;
+    }
+    .obj:hover { background: var(--sidebar-hover); }
+    .obj.active {
+      background: var(--sidebar-active);
+      box-shadow: inset 3px 0 0 #3d9b75;
+    }
+    .obj .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .badge {
+      font-size: 10px;
+      color: var(--sidebar-muted);
+      font-family: var(--mono);
+      background: rgba(255,255,255,0.06);
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+    .type-view { color: #9fb4ff; background: rgba(159, 180, 255, 0.12); }
+    main {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background:
+        radial-gradient(1200px 240px at 0% 0%, rgba(11, 110, 79, 0.06), transparent 60%),
+        var(--bg);
+    }
+    .toolbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .crumbs { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+    .crumbs span { color: var(--muted); }
+    .tabs { margin-left: auto; display: flex; gap: 4px; background: #f3f6f8; padding: 4px; border-radius: 10px; }
+    button, select, input, textarea { font-family: inherit; }
+    .btn, .tab {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      padding: 7px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      border-radius: 8px;
+      font-weight: 500;
+    }
+    .btn:hover, .tab:hover { background: #f8f9fb; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .tab {
+      border: 0;
+      background: transparent;
+      padding: 7px 14px;
+      color: var(--muted);
+    }
+    .tab.active {
+      background: var(--surface);
+      color: var(--accent);
+      font-weight: 650;
+      box-shadow: 0 1px 2px rgba(16, 35, 58, 0.08);
+    }
+    .filters { display: flex; gap: 8px; align-items: center; width: 100%; }
+    .filters input, .filters select {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #fff;
+      border-radius: 8px;
+    }
+    .filters input { width: 280px; }
+    .filters input:focus, .filters select:focus, textarea:focus {
+      outline: none;
+      border-color: #3d9b75;
+      box-shadow: 0 0 0 3px rgba(11, 110, 79, 0.15);
+    }
+    .panel { flex: 1; min-height: 0; display: none; flex-direction: column; }
+    .panel.active { display: flex; }
+    .table-wrap {
+      flex: 1;
+      overflow: auto;
+      background: var(--surface);
+      margin: 16px 20px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid #eef1f5;
+      padding: 9px 12px;
+      text-align: left;
+      white-space: nowrap;
+      max-width: 420px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: top;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #f5f8fa;
+      font-weight: 650;
+      cursor: pointer;
+      z-index: 1;
+      color: #334155;
+      letter-spacing: 0.01em;
+    }
+    th.sort-asc::after, th.sort-desc::after { color: var(--accent); font-weight: 700; }
+    th.sort-asc::after { content: " ↑"; }
+    th.sort-desc::after { content: " ↓"; }
+    tbody tr:nth-child(even) td { background: #fbfcfd; }
+    tr:hover td { background: #f3faf7 !important; }
+    .null { color: var(--null); font-style: italic; }
+    .cell { cursor: pointer; font-family: var(--mono); font-size: 12px; }
+    .pager {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .pager-actions { display: flex; gap: 6px; align-items: center; }
+    .status-error, .empty {
+      margin: 24px;
+      padding: 18px 20px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      border-radius: var(--radius);
+    }
+    .status-error { background: var(--danger-soft); color: var(--danger); border-color: #fecdca; }
+    .query-box {
+      padding: 16px 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      padding: 14px;
+      font: 13px var(--mono);
+      outline: none;
+      border-radius: var(--radius);
+      background: #0f1722;
+      color: #e8eef6;
+      line-height: 1.5;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+    }
+    .query-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .field-label {
+      font-size: 12px;
+      font-weight: 650;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .path-input {
+      width: 100%;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      font: 13px var(--mono);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+    .path-browse {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .path-browse .btn { white-space: nowrap; }
+    .restore-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .restore-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: end;
+    }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      padding-bottom: 8px;
+      white-space: nowrap;
+    }
+    .restore-log {
+      flex: 1;
+      margin: 0 20px 20px;
+      padding: 14px;
+      overflow: auto;
+      background: #0f1722;
+      color: #d7e2ee;
+      font: 12px var(--mono);
+      border-radius: var(--radius);
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 180px;
+    }
+    .overview { padding: 24px 20px; overflow: auto; }
+    .overview-title {
+      margin: 0 0 16px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .overview-sub { margin: -10px 0 18px; color: var(--muted); font-size: 13px; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      padding: 16px 18px;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .card .label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .card .value { font-size: 24px; font-weight: 700; margin-top: 8px; letter-spacing: -0.04em; }
+    .pill { display: inline-block; padding: 1px 7px; font-size: 11px; background: var(--accent-soft); color: var(--accent); border-radius: 999px; font-weight: 650; }
+    .pill.pk { background: #f4ebff; color: var(--pk); }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      backdrop-filter: blur(4px);
+      display: none;
+      place-items: center;
+      padding: 24px;
+      z-index: 20;
+    }
+    .modal.open { display: grid; }
+    .modal-card {
+      background: #fff;
+      width: min(800px, 100%);
+      max-height: 80vh;
+      overflow: auto;
+      border: 1px solid var(--line);
+      padding: 18px 20px;
+      border-radius: 14px;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+    }
+    .modal-card pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px var(--mono);
+      margin: 12px 0 0;
+      background: #f8fafc;
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+    }
+    .setup-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background:
+        radial-gradient(900px 320px at 10% 0%, rgba(11, 110, 79, 0.18), transparent 55%),
+        linear-gradient(180deg, #12324a 0%, #0c1b2d 100%);
+      display: grid;
+      place-items: center;
+      padding: 32px 20px;
+      color: #e8eef6;
+    }
+    .setup-overlay.done { display: none; }
+    .setup-card {
+      width: min(520px, 100%);
+      background: rgba(16, 35, 58, 0.72);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+      padding: 28px 28px 22px;
+      backdrop-filter: blur(10px);
+    }
+    .setup-card h1 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+    .setup-card .setup-sub {
+      margin: 6px 0 22px;
+      color: #93a4bb;
+      font-size: 13px;
+    }
+    .setup-steps {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .setup-step {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .setup-step.ok { border-color: rgba(50, 213, 131, 0.28); }
+    .setup-step.running { border-color: rgba(61, 155, 117, 0.45); }
+    .setup-step.error, .setup-step.action { border-color: rgba(249, 112, 102, 0.35); }
+    .setup-step.action { border-color: rgba(247, 180, 88, 0.4); }
+    .setup-icon {
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      border-radius: 50%;
+      border: 2px solid #5d6b7d;
+      position: relative;
+    }
+    .setup-step.pending .setup-icon { opacity: 0.45; }
+    .setup-step.ok .setup-icon {
+      border-color: #32d583;
+      background: #32d583;
+    }
+    .setup-step.ok .setup-icon::after {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 5px;
+      height: 9px;
+      border: solid #0c1b2d;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    .setup-step.running .setup-icon {
+      border-color: transparent;
+      border-top-color: #3d9b75;
+      border-right-color: #3d9b75;
+      animation: setup-spin 0.8s linear infinite;
+    }
+    .setup-step.error .setup-icon {
+      border-color: #f97066;
+      background: #f97066;
+    }
+    .setup-step.error .setup-icon::before,
+    .setup-step.error .setup-icon::after {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 3px;
+      width: 2px;
+      height: 10px;
+      background: #0c1b2d;
+    }
+    .setup-step.error .setup-icon::before { transform: rotate(45deg); }
+    .setup-step.error .setup-icon::after { transform: rotate(-45deg); }
+    .setup-step.action .setup-icon {
+      border-color: #f7b458;
+      background: #f7b458;
+    }
+    .setup-label { font-size: 14px; font-weight: 600; }
+    .setup-detail {
+      margin-top: 3px;
+      color: #93a4bb;
+      font-size: 12px;
+      font-family: var(--mono);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .setup-actions {
+      margin-top: 18px;
+      display: grid;
+      gap: 10px;
+      justify-items: start;
+    }
+    .setup-hint { margin: 0; color: #93a4bb; font-size: 12px; }
+    .setup-form {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .setup-form[hidden],
+    .setup-steps[hidden] { display: none; }
+    .setup-form label {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 650;
+      color: #b7c6d8;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .setup-form input {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: #0a1624;
+      color: #e8eef6;
+      padding: 10px 12px;
+      font: 14px var(--sans);
+      border-radius: 8px;
+    }
+    .setup-form input:focus {
+      outline: none;
+      border-color: #3d9b75;
+      box-shadow: 0 0 0 3px rgba(11, 110, 79, 0.25);
+    }
+    .setup-form .btn { justify-self: start; margin-top: 4px; }
+    .setup-form .setup-cred-error { color: #f97066; min-height: 1em; text-transform: none; letter-spacing: 0; font-weight: 500; }
+    @keyframes setup-spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1100px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <button class="icon-btn" id="sidebarToggle" type="button" title="Hide tables" aria-controls="objectList" aria-expanded="true">
+        <span class="chevron"></span>
+      </button>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <ellipse cx="12" cy="6" rx="7" ry="3"></ellipse>
+            <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"></path>
+            <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>
+          </svg>
+        </div>
+        <div class="brand-copy">
+          <strong>DRAP Database Console</strong>
+          <span>Local inspection workspace</span>
+        </div>
+      </div>
+    </div>
+    <div class="conn"><span class="dot" id="dot"></span><span id="connText">Starting…</span></div>
+  </header>
+  <aside>
+    <div class="side-search">
+      <input id="objectSearch" placeholder="Search tables and views" />
+      <button class="icon-btn dark" id="sidebarCollapse" type="button" title="Hide tables">
+        <span class="chevron"></span>
+      </button>
+    </div>
+    <div class="object-list" id="objectList"></div>
+  </aside>
+  <main>
+    <div class="toolbar">
+      <div class="crumbs" id="crumbs">Overview</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="data">Data</button>
+        <button class="tab" data-tab="structure">Structure</button>
+        <button class="tab" data-tab="query">Query</button>
+        <button class="tab" data-tab="restore">Restore</button>
+      </div>
+    </div>
+    <section class="panel active" id="panel-data">
+      <div class="overview" id="overview"></div>
+      <div class="toolbar" id="dataFilters" style="display:none">
+        <div class="filters">
+          <input id="rowSearch" placeholder="Search this table" />
+          <select id="pageSize">
+            <option>25</option>
+            <option selected>50</option>
+            <option>100</option>
+            <option>200</option>
+          </select>
+          <button class="btn" id="reloadBtn">Reload</button>
+        </div>
+      </div>
+      <div class="table-wrap" id="dataWrap"></div>
+      <div class="pager" id="pager" style="display:none">
+        <div id="pageInfo"></div>
+        <div class="pager-actions">
+          <button class="btn" id="prevPage">Previous</button>
+          <button class="btn" id="nextPage">Next</button>
+        </div>
+      </div>
+    </section>
+    <section class="panel" id="panel-structure">
+      <div class="table-wrap" id="structWrap"></div>
+    </section>
+    <section class="panel" id="panel-query">
+      <div class="query-box">
+        <textarea id="sql" spellcheck="false">SELECT TOP 100 * FROM sys.tables ORDER BY name;</textarea>
+        <div class="query-actions">
+          <span>Ctrl / Cmd + Enter to run. Results are capped at 2,000 rows per result set.</span>
+          <button class="btn primary" id="runSql">Run query</button>
+        </div>
+      </div>
+      <div class="table-wrap" id="queryWrap"></div>
+    </section>
+    <section class="panel" id="panel-restore">
+      <div class="query-box">
+        <p class="overview-sub" style="margin:0">Browse for a .bacpac file or paste its full path. Import replaces the target database if you leave that option checked.</p>
+        <div class="restore-grid">
+          <label class="field-label" for="restorePath">Backup file path</label>
+          <div class="path-browse">
+            <input id="restorePath" class="path-input" placeholder="/path/to/backup.bacpac" value="/Users/waqar/Desktop/DRAP database/drap2-2026-9-7-15-13.bacpac" />
+            <button type="button" class="btn" id="browseBacpac">Browse</button>
+            <input type="file" id="restoreFile" accept=".bacpac,application/octet-stream" hidden />
+          </div>
+          <div class="restore-row">
+            <div>
+              <label class="field-label" for="restoreDatabase">Target database</label>
+              <input id="restoreDatabase" class="path-input" value="DRAP" style="margin-top:6px" />
+            </div>
+            <label class="check">
+              <input type="checkbox" id="restoreReplace" checked />
+              Replace if it already exists
+            </label>
+          </div>
+        </div>
+        <div class="query-actions">
+          <span>A 180 MB backup usually takes a few minutes. The current database will be dropped if replace is on.</span>
+          <button class="btn primary" id="runRestore">Import backup</button>
+        </div>
+      </div>
+      <pre class="restore-log" id="restoreLog">Ready to import.</pre>
+    </section>
+  </main>
+  <div class="modal" id="modal">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+        <strong id="modalTitle">Value</strong>
+        <button class="btn" id="closeModal">Close</button>
+      </div>
+      <pre id="modalBody"></pre>
+    </div>
+  </div>
+  <div class="setup-overlay" id="setupOverlay">
+    <div class="setup-card">
+      <h1>Getting the console ready</h1>
+      <p class="setup-sub" id="setupHeadline">Checking Docker and SQL Server…</p>
+      <form class="setup-form" id="setupCredentials" hidden>
+        <label>
+          User
+          <input id="setupUser" name="user" autocomplete="username" spellcheck="false" />
+        </label>
+        <label>
+          Password
+          <input id="setupPassword" name="password" type="password" autocomplete="current-password" />
+        </label>
+        <label>
+          Database
+          <input id="setupDatabase" name="database" spellcheck="false" />
+        </label>
+        <p class="setup-hint setup-cred-error" id="setupCredError"></p>
+        <button class="btn primary" type="submit">Continue</button>
+      </form>
+      <ol class="setup-steps" id="setupSteps">
+        <li class="setup-step pending">
+          <span class="setup-icon" aria-hidden="true"></span>
+          <div><div class="setup-label">Docker is installed</div></div>
+        </li>
+        <li class="setup-step pending">
+          <span class="setup-icon" aria-hidden="true"></span>
+          <div><div class="setup-label">Docker is running</div></div>
+        </li>
+        <li class="setup-step pending">
+          <span class="setup-icon" aria-hidden="true"></span>
+          <div><div class="setup-label">SQL Server image</div></div>
+        </li>
+        <li class="setup-step pending">
+          <span class="setup-icon" aria-hidden="true"></span>
+          <div><div class="setup-label">SQL Server is starting</div></div>
+        </li>
+        <li class="setup-step pending">
+          <span class="setup-icon" aria-hidden="true"></span>
+          <div><div class="setup-label">Database is ready</div></div>
+        </li>
+      </ol>
+      <div class="setup-actions" id="setupActions"></div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
