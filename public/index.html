@@ -95,7 +95,15 @@
       white-space: nowrap;
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #f97066; flex: 0 0 auto; box-shadow: 0 0 0 4px rgba(249, 112, 102, 0.18); }
-    .dot.ok { background: #32d583; box-shadow: 0 0 0 4px rgba(50, 213, 131, 0.18); }
+    .dot.ok {
+      background: #32d583;
+      box-shadow: 0 0 0 4px rgba(50, 213, 131, 0.18);
+      animation: dot-ok-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes dot-ok-pulse {
+      0%, 100% { box-shadow: 0 0 0 4px rgba(50, 213, 131, 0.18); transform: scale(1); }
+      50% { box-shadow: 0 0 0 8px rgba(50, 213, 131, 0); transform: scale(1.12); }
+    }
     aside {
       background: var(--sidebar);
       color: var(--sidebar-text);
@@ -657,6 +665,7 @@
         <button class="tab active" data-tab="data">Data</button>
         <button class="tab" data-tab="structure">Structure</button>
         <button class="tab" data-tab="query">Query</button>
+        <button class="tab" data-tab="export">Export</button>
         <button class="tab" data-tab="restore">Restore</button>
       </div>
     </div>
@@ -696,13 +705,29 @@
       </div>
       <div class="table-wrap" id="queryWrap"></div>
     </section>
+    <section class="panel" id="panel-export">
+      <div class="query-box">
+        <p class="overview-sub" style="margin:0">Export the current database to a .bacpac file and download it.</p>
+        <div class="restore-grid">
+          <div>
+            <label class="field-label" for="exportDatabase">Database</label>
+            <input id="exportDatabase" class="path-input" value="DRAP" style="margin-top:6px" />
+          </div>
+        </div>
+        <div class="query-actions">
+          <span>A large database can take several minutes. The file downloads when export finishes.</span>
+          <button class="btn primary" id="runExport">Export .bacpac</button>
+        </div>
+      </div>
+      <pre class="restore-log" id="exportLog">Ready to export.</pre>
+    </section>
     <section class="panel" id="panel-restore">
       <div class="query-box">
         <p class="overview-sub" style="margin:0">Browse for a .bacpac file or paste its full path. Import replaces the target database if you leave that option checked.</p>
         <div class="restore-grid">
           <label class="field-label" for="restorePath">Backup file path</label>
           <div class="path-browse">
-            <input id="restorePath" class="path-input" placeholder="/path/to/backup.bacpac" value="/Users/waqar/Desktop/DRAP database/drap2-2026-9-7-15-13.bacpac" />
+            <input id="restorePath" class="path-input" placeholder="/path/to/backup.bacpac" value="" />
             <button type="button" class="btn" id="browseBacpac">Browse</button>
             <input type="file" id="restoreFile" accept=".bacpac,application/octet-stream" hidden />
           </div>
@@ -769,7 +794,7 @@
         </li>
         <li class="setup-step pending">
           <span class="setup-icon" aria-hidden="true"></span>
-          <div><div class="setup-label">SQL Server is starting</div></div>
+          <div><div class="setup-label">SQL Server</div></div>
         </li>
         <li class="setup-step pending">
           <span class="setup-icon" aria-hidden="true"></span>

@@ -14,7 +14,10 @@ const CREDENTIALS_PATH = path.join(__dirname, ".db-config.json");
 const CONTAINER = process.env.SQLSERVER_CONTAINER || "sqlserver";
 const SQL_IMAGE =
   process.env.SQLSERVER_IMAGE || "mcr.microsoft.com/mssql/server:2022-latest";
-const HOST = process.env.DB_HOST || "localhost";
+const HOST =
+  process.env.DB_HOST === "localhost"
+    ? "127.0.0.1"
+    : process.env.DB_HOST || "127.0.0.1";
 const PORT = Number(process.env.DB_PORT || 1433);
 const DOCKER_WAIT_MS = 180000;
 const SQL_WAIT_MS = 180000;
@@ -23,7 +26,7 @@ const STEP_DEFS = [
   { id: "docker-installed", label: "Docker is installed" },
   { id: "docker-running", label: "Docker is running" },
   { id: "sql-image", label: "SQL Server image" },
-  { id: "sql-start", label: "SQL Server is starting" },
+  { id: "sql-start", label: "SQL Server" },
   { id: "sql-ready", label: "Database is ready" },
 ];
 
@@ -116,7 +119,7 @@ function setStep(id, state, detail = "") {
   if (!step) return;
   step.status = state;
   step.detail = detail;
-  if (state === "running" && detail) setHeadline(detail);
+  if ((state === "running" || state === "ok") && detail) setHeadline(detail);
   else if (state === "ok") setHeadline(step.label);
   else if (state === "action" || state === "error") {
     setHeadline(detail || step.label);
@@ -165,18 +168,23 @@ function applyCredentialsTo(config) {
   config.database = creds.database;
 }
 
+async function waitForCredentialsForm(headline) {
+  status.needsCredentials = true;
+  status.error = null;
+  status.canRetry = false;
+  setHeadline(headline);
+  await new Promise((resolve) => {
+    credentialsWaiter = resolve;
+  });
+  status.needsCredentials = false;
+}
+
 async function ensureCredentials() {
   if (getCredentials()) {
     status.needsCredentials = false;
     return;
   }
-
-  status.needsCredentials = true;
-  setHeadline("Enter user, password, and database");
-  await new Promise((resolve) => {
-    credentialsWaiter = resolve;
-  });
-  status.needsCredentials = false;
+  await waitForCredentialsForm("Enter user, password, and database");
 }
 
 function saveCredentials({ user, password, database }) {
@@ -638,6 +646,15 @@ function portOpen() {
   });
 }
 
+function isLoginFailed(err) {
+  const message = String(err && err.message ? err.message : err);
+  return (
+    /login failed/i.test(message) ||
+    err?.code === "ELOGIN" ||
+    Number(err?.number) === 18456
+  );
+}
+
 async function loginReady() {
   const pool = new sql.ConnectionPool({
     user: dbCreds.user,
@@ -658,8 +675,15 @@ async function loginReady() {
   });
 
   try {
-    await pool.connect();
-    await pool.request().query("SELECT 1 AS ok");
+    await Promise.race([
+      (async () => {
+        await pool.connect();
+        await pool.request().query("SELECT 1 AS ok");
+      })(),
+      sleep(8000).then(() => {
+        throw new Error(`Login timed out on ${HOST}:${PORT}`);
+      }),
+    ]);
     return true;
   } catch (err) {
     return err;
@@ -673,24 +697,35 @@ async function loginReady() {
 }
 
 async function waitForSqlServer() {
-  setStep("sql-start", "running", `Waiting for SQL Server on ${HOST}:${PORT}…`);
   const deadline = Date.now() + SQL_WAIT_MS;
 
   while (Date.now() < deadline) {
     if (!(await portOpen())) {
+      setStep(
+        "sql-start",
+        "running",
+        `Waiting for SQL Server on ${HOST}:${PORT}…`
+      );
       await sleep(2000);
       continue;
     }
 
-    setStep("sql-start", "running", "SQL Server is starting…");
+    setStep("sql-start", "running", "Checking the SQL Server login…");
     const result = await loginReady();
     if (result === true) {
       setStep("sql-start", "ok", "SQL Server is running");
       return;
     }
 
+    if (isLoginFailed(result)) {
+      await waitForCredentialsForm(
+        "SQL Server rejected the user or password. Enter them again."
+      );
+      continue;
+    }
+
     const message = result && result.message ? result.message : String(result);
-    setStep("sql-start", "running", `Not ready yet (${message})`);
+    setStep("sql-start", "running", `SQL Server is not ready yet (${message})`);
     await sleep(3000);
   }
 

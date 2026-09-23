@@ -99,6 +99,9 @@ function renderOverview() {
           <div class="card"><div class="label">Views</div><div class="value">${fmt(m.view_count)}</div></div>
           <div class="card"><div class="label">Size (MB)</div><div class="value">${m.size_mb ?? "—"}</div></div>
         </div>
+        <div style="margin:0 0 20px">
+          <button class="btn" id="overviewExport" type="button">Export .bacpac</button>
+        </div>
         <div class="card">
           <div class="label">Largest tables</div>
           <div class="table-wrap" style="max-height:none;margin:12px 0 0;box-shadow:none">
@@ -292,6 +295,10 @@ function setTab(tab) {
   document.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", el.dataset.tab === tab));
   document.querySelectorAll(".panel").forEach((el) => el.classList.toggle("active", el.id === `panel-${tab}`));
   if (tab === "structure") loadStructure();
+  if (tab === "export") {
+    $("crumbs").textContent = "Export backup";
+    if (state.meta && state.meta.database) $("exportDatabase").value = state.meta.database;
+  }
   if (tab === "restore") {
     $("crumbs").textContent = "Restore backup";
     if (state.meta && state.meta.database) $("restoreDatabase").value = state.meta.database;
@@ -401,6 +408,10 @@ $("dataWrap").addEventListener("click", (e) => {
   if (cell) openModal(cell.dataset.col, cellRawValue(cell));
 });
 $("overview").addEventListener("click", (e) => {
+  if (e.target.closest("#overviewExport")) {
+    setTab("export");
+    return;
+  }
   const cell = e.target.closest("[data-open]");
   if (!cell) return;
   const [schema, table] = cell.dataset.open.split(".");
@@ -435,21 +446,11 @@ async function runRestore() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sourcePath, database, replace }),
     });
-    if (!res.body) {
+    if (!res.ok) {
       const data = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(data.error || res.statusText);
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      text += decoder.decode(value, { stream: true });
-      if (text.length > 80000) text = text.slice(text.length - 80000);
-      $("restoreLog").textContent = text;
-      $("restoreLog").scrollTop = $("restoreLog").scrollHeight;
-    }
+    const text = await streamJobLog(res, $("restoreLog"));
     if (text.includes("\nDONE")) {
       state.table = null;
       await loadMeta();
@@ -489,6 +490,64 @@ $("restoreFile").addEventListener("change", async (e) => {
   }
 });
 $("runRestore").addEventListener("click", runRestore);
+async function streamJobLog(res, logEl) {
+  if (!res.body) {
+    const data = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(data.error || res.statusText);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += decoder.decode(value, { stream: true });
+    if (text.length > 80000) text = text.slice(text.length - 80000);
+    logEl.textContent = text;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  return text;
+}
+async function runExport() {
+  const database = $("exportDatabase").value.trim();
+  if (!database) {
+    $("exportLog").textContent = "Enter a database name.";
+    return;
+  }
+  $("runExport").disabled = true;
+  $("exportLog").textContent = "Starting export…\n";
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ database }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(data.error || res.statusText);
+    }
+    const text = await streamJobLog(res, $("exportLog"));
+    const done = text.match(/\nDONE (\S+)(?: (\S+))?/);
+    if (done) {
+      const file = done[1];
+      const name = done[2] || file;
+      const link = document.createElement("a");
+      link.href = `/api/export/download/${encodeURIComponent(file)}?name=${encodeURIComponent(name)}`;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      $("exportLog").textContent += "\nDownload started.";
+    } else if (text.includes("ERROR:")) {
+      /* already shown */
+    }
+  } catch (err) {
+    $("exportLog").textContent += `\n${err.message}`;
+  } finally {
+    $("runExport").disabled = false;
+  }
+}
+$("runExport").addEventListener("click", runExport);
 $("queryWrap").addEventListener("click", (e) => {
   const cell = e.target.closest("td.cell");
   if (cell) openModal(cell.dataset.col, cellRawValue(cell));

@@ -36,7 +36,10 @@ const SEARCHABLE_TYPES = new Set([
 const config = {
   user: "",
   password: "",
-  server: process.env.DB_HOST || "localhost",
+  server:
+    process.env.DB_HOST === "localhost"
+      ? "127.0.0.1"
+      : process.env.DB_HOST || "127.0.0.1",
   port: Number(process.env.DB_PORT || 1433),
   database: "",
   options: {
@@ -53,7 +56,8 @@ const config = {
 
 let pool = null;
 let poolReady = null;
-let restoreRunning = false;
+let packageRunning = false;
+let lastExportPath = null;
 
 async function connectPool() {
   pool = new sql.ConnectionPool(config);
@@ -124,20 +128,35 @@ async function dropDatabase(name) {
   }
 }
 
-function runSqlPackage(sourceFile, database, onLog) {
+function runSqlPackage({ action, file, database, onLog }) {
   const sqlpackage = findSqlPackage();
   const encrypt = config.options.encrypt ? "True" : "False";
-  const args = [
-    "/Action:Import",
-    `/SourceFile:${sourceFile}`,
-    `/TargetServerName:${config.server},${config.port}`,
-    `/TargetDatabaseName:${database}`,
-    `/TargetUser:${config.user}`,
-    `/TargetPassword:${config.password}`,
-    `/TargetTrustServerCertificate:${config.options.trustServerCertificate ? "True" : "False"}`,
-    `/TargetEncryptConnection:${encrypt}`,
-    `/p:CommandTimeout=0`,
-  ];
+  const trust = config.options.trustServerCertificate ? "True" : "False";
+  const server = `${config.server},${config.port}`;
+  const args =
+    action === "Export"
+      ? [
+          "/Action:Export",
+          `/SourceServerName:${server}`,
+          `/SourceDatabaseName:${database}`,
+          `/SourceUser:${config.user}`,
+          `/SourcePassword:${config.password}`,
+          `/SourceTrustServerCertificate:${trust}`,
+          `/SourceEncryptConnection:${encrypt}`,
+          `/TargetFile:${file}`,
+          `/p:CommandTimeout=0`,
+        ]
+      : [
+          "/Action:Import",
+          `/SourceFile:${file}`,
+          `/TargetServerName:${server}`,
+          `/TargetDatabaseName:${database}`,
+          `/TargetUser:${config.user}`,
+          `/TargetPassword:${config.password}`,
+          `/TargetTrustServerCertificate:${trust}`,
+          `/TargetEncryptConnection:${encrypt}`,
+          `/p:CommandTimeout=0`,
+        ];
 
   return new Promise((resolve, reject) => {
     const child = spawn(sqlpackage, args, { env: process.env });
@@ -522,9 +541,113 @@ app.post("/api/restore/upload", (req, res) => {
   out.on("error", fail);
 });
 
+function exportDownloadName(database) {
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+  const safe = String(database || "database").replace(/[^A-Za-z0-9._-]/g, "_") || "database";
+  return `${safe}-${stamp}.bacpac`;
+}
+
+function isExportTempName(name) {
+  return /^drap-export-\d+-[A-Za-z0-9._-]+\.bacpac$/.test(name);
+}
+
+app.post("/api/export", async (req, res) => {
+  if (packageRunning) {
+    return res.status(409).json({ error: "A backup job is already running" });
+  }
+  if (!setup.isReady()) {
+    return res.status(503).json({ error: "SQL Server is still starting" });
+  }
+
+  const database = String(req.body?.database || config.database).trim();
+  try {
+    ident(database);
+  } catch {
+    return res.status(400).json({ error: "Invalid database name" });
+  }
+
+  const exists = await databaseExists(database).catch((err) => {
+    res.status(500).json({ error: err.message });
+    return null;
+  });
+  if (exists === null) return;
+  if (!exists) {
+    return res.status(404).json({ error: `Database [${database}] was not found` });
+  }
+
+  const safeDb = database.replace(/[^A-Za-z0-9._-]/g, "_") || "database";
+  const tempName = `drap-export-${Date.now()}-${safeDb}.bacpac`;
+  const dest = path.join(os.tmpdir(), tempName);
+  const downloadName = exportDownloadName(database);
+
+  packageRunning = true;
+  res.status(200);
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+
+  const log = (text) => {
+    res.write(String(text).endsWith("\n") ? text : `${text}\n`);
+  };
+
+  try {
+    if (lastExportPath && lastExportPath !== dest) {
+      try {
+        fs.unlinkSync(lastExportPath);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    log(`Exporting [${database}] to ${downloadName}`);
+    log("Running sqlpackage export. This can take several minutes...");
+    await runSqlPackage({
+      action: "Export",
+      file: dest,
+      database,
+      onLog: log,
+    });
+    if (!fs.existsSync(dest)) {
+      throw new Error("sqlpackage finished, but the .bacpac file was not created.");
+    }
+    lastExportPath = dest;
+    const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(1);
+    log(`Export finished (${sizeMb} MB).`);
+    log(`DONE ${tempName} ${downloadName}`);
+    res.end();
+  } catch (err) {
+    try {
+      fs.unlinkSync(dest);
+    } catch (_) {
+      /* ignore */
+    }
+    log(`ERROR: ${err.message}`);
+    res.end();
+  } finally {
+    packageRunning = false;
+  }
+});
+
+app.get("/api/export/download/:file", (req, res) => {
+  const name = path.basename(String(req.params.file || ""));
+  if (!isExportTempName(name)) {
+    return res.status(400).json({ error: "Invalid export file" });
+  }
+  const full = path.join(os.tmpdir(), name);
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    return res.status(404).json({ error: "Export file not found. Run export again." });
+  }
+  const suggested = String(req.query.name || name).replace(/[^A-Za-z0-9._-]/g, "_");
+  const downloadName = suggested.toLowerCase().endsWith(".bacpac")
+    ? suggested
+    : `${suggested}.bacpac`;
+  res.download(full, downloadName);
+});
+
 app.post("/api/restore", async (req, res) => {
-  if (restoreRunning) {
-    return res.status(409).json({ error: "A restore is already running" });
+  if (packageRunning) {
+    return res.status(409).json({ error: "A backup job is already running" });
   }
 
   const sourcePath = String(req.body?.sourcePath || "").trim();
@@ -546,7 +669,7 @@ app.post("/api/restore", async (req, res) => {
     return res.status(400).json({ error: "Invalid target database name" });
   }
 
-  restoreRunning = true;
+  packageRunning = true;
   res.status(200);
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
@@ -582,7 +705,12 @@ app.post("/api/restore", async (req, res) => {
     }
 
     log("Running sqlpackage import. This can take several minutes...");
-    await runSqlPackage(sourcePath, database, log);
+    await runSqlPackage({
+      action: "Import",
+      file: sourcePath,
+      database,
+      onLog: log,
+    });
     log("Import finished.");
 
     if (database === config.database) {
@@ -604,7 +732,7 @@ app.post("/api/restore", async (req, res) => {
     }
     res.end();
   } finally {
-    restoreRunning = false;
+    packageRunning = false;
   }
 });
 
