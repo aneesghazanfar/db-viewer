@@ -112,6 +112,70 @@ async function databaseExists(name) {
   }
 }
 
+const SYSTEM_DATABASES = new Set(["master", "tempdb", "model", "msdb"]);
+
+function assertUserDatabaseName(name) {
+  const value = setup.validateDatabaseName(name);
+  if (SYSTEM_DATABASES.has(value.toLowerCase())) {
+    throw new Error(`"${value}" is a system database.`);
+  }
+  return value;
+}
+
+async function listUserDatabases() {
+  const master = new sql.ConnectionPool(masterConfig());
+  await master.connect();
+  try {
+    const result = await master.request().query(`
+      SELECT
+        d.name,
+        CAST(SUM(mf.size) * 8.0 / 1024 AS decimal(18, 1)) AS size_mb,
+        d.state_desc,
+        d.create_date
+      FROM sys.databases d
+      LEFT JOIN sys.master_files mf ON mf.database_id = d.database_id
+      WHERE d.name NOT IN ('master', 'tempdb', 'model', 'msdb')
+      GROUP BY d.name, d.state_desc, d.create_date
+      ORDER BY d.name
+    `);
+    return result.recordset.map((row) => ({
+      name: row.name,
+      size_mb: row.size_mb,
+      state: row.state_desc,
+      create_date: row.create_date,
+      current: row.name === config.database,
+    }));
+  } finally {
+    await master.close();
+  }
+}
+
+async function createUserDatabase(name) {
+  const dbName = assertUserDatabaseName(name);
+  if (await databaseExists(dbName)) {
+    throw new Error(`Database [${dbName}] already exists.`);
+  }
+  const master = new sql.ConnectionPool(masterConfig());
+  await master.connect();
+  try {
+    await master.request().query(`CREATE DATABASE ${ident(dbName)}`);
+  } finally {
+    await master.close();
+  }
+  return dbName;
+}
+
+async function switchDatabase(name) {
+  const dbName = assertUserDatabaseName(name);
+  if (!(await databaseExists(dbName))) {
+    throw new Error(`Database [${dbName}] was not found.`);
+  }
+  setup.setActiveDatabase(dbName);
+  setup.applyCredentialsTo(config);
+  await reconnectPool();
+  return dbName;
+}
+
 async function dropDatabase(name) {
   const master = new sql.ConnectionPool(masterConfig());
   await master.connect();
@@ -341,6 +405,91 @@ app.post("/api/setup/credentials", (req, res) => {
     });
     setup.applyCredentialsTo(config);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/databases", async (_req, res) => {
+  try {
+    if (!setup.isReady()) {
+      return res.status(503).json({ error: "SQL Server is still starting" });
+    }
+    const databases = await listUserDatabases();
+    res.json({ current: config.database, databases });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/databases", async (req, res) => {
+  try {
+    if (!setup.isReady()) {
+      return res.status(503).json({ error: "SQL Server is still starting" });
+    }
+    const name = await createUserDatabase(req.body?.name);
+    const use = req.body?.use !== false;
+    if (use) {
+      await switchDatabase(name);
+    }
+    const databases = await listUserDatabases();
+    res.json({ ok: true, name, current: config.database, databases });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/databases/use", async (req, res) => {
+  try {
+    if (!setup.isReady()) {
+      return res.status(503).json({ error: "SQL Server is still starting" });
+    }
+    const name = await switchDatabase(req.body?.name);
+    const databases = await listUserDatabases();
+    res.json({ ok: true, name, current: config.database, databases });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/databases/:name", async (req, res) => {
+  try {
+    if (!setup.isReady()) {
+      return res.status(503).json({ error: "SQL Server is still starting" });
+    }
+    const name = assertUserDatabaseName(req.params.name);
+    if (!(await databaseExists(name))) {
+      return res.status(404).json({ error: `Database [${name}] was not found.` });
+    }
+
+    const all = await listUserDatabases();
+    if (all.length <= 1 && name === config.database) {
+      return res.status(400).json({
+        error: "Cannot delete the only remaining database. Create another one first.",
+      });
+    }
+
+    let switchedTo = config.database;
+    if (name === config.database) {
+      const fallback = all.find((db) => db.name !== name);
+      if (!fallback) {
+        return res.status(400).json({
+          error: "Cannot delete the active database without another database to switch to.",
+        });
+      }
+      await switchDatabase(fallback.name);
+      switchedTo = fallback.name;
+    }
+
+    await dropDatabase(name);
+    const databases = await listUserDatabases();
+    res.json({
+      ok: true,
+      deleted: name,
+      current: config.database,
+      switchedTo,
+      databases,
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

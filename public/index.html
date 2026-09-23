@@ -250,6 +250,12 @@
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .btn.danger {
+      background: var(--danger-soft);
+      border-color: #fecdca;
+      color: var(--danger);
+    }
+    .btn.danger:hover { background: #fde8e6; }
     .tab {
       border: 0;
       background: transparent;
@@ -620,6 +626,17 @@
       box-shadow: 0 0 0 3px rgba(11, 110, 79, 0.25);
     }
     .setup-form .btn { justify-self: start; margin-top: 4px; }
+    .setup-form .setup-hint {
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 500;
+      line-height: 1.45;
+    }
+    .setup-form .setup-hint code {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 0.92em;
+      color: #d7e4f5;
+    }
     .setup-form .setup-cred-error { color: #f97066; min-height: 1em; text-transform: none; letter-spacing: 0; font-weight: 500; }
     @keyframes setup-spin { to { transform: rotate(360deg); } }
     @media (max-width: 1100px) {
@@ -665,6 +682,7 @@
         <button class="tab active" data-tab="data">Data</button>
         <button class="tab" data-tab="structure">Structure</button>
         <button class="tab" data-tab="query">Query</button>
+        <button class="tab" data-tab="databases">Databases</button>
         <button class="tab" data-tab="export">Export</button>
         <button class="tab" data-tab="restore">Restore</button>
       </div>
@@ -704,6 +722,28 @@
         </div>
       </div>
       <div class="table-wrap" id="queryWrap"></div>
+    </section>
+    <section class="panel" id="panel-databases">
+      <div class="query-box">
+        <p class="overview-sub" style="margin:0">Create extra databases on this SQL Server, open one in the console, or delete ones you no longer need.</p>
+        <div class="restore-grid" style="margin-top:14px">
+          <div class="restore-row">
+            <div style="flex:1">
+              <label class="field-label" for="newDatabaseName">New database name</label>
+              <input id="newDatabaseName" class="path-input" style="margin-top:6px" placeholder="e.g. DRAP_Test" autocomplete="off" spellcheck="false" />
+            </div>
+            <label class="check" style="align-self:end;margin-bottom:2px">
+              <input type="checkbox" id="newDatabaseUse" checked />
+              Open after create
+            </label>
+          </div>
+        </div>
+        <div class="query-actions">
+          <span id="databasesStatus">Loading databases…</span>
+          <button class="btn primary" id="createDatabase" type="button">Create database</button>
+        </div>
+      </div>
+      <div class="table-wrap" id="databasesWrap"></div>
     </section>
     <section class="panel" id="panel-export">
       <div class="query-box">
@@ -764,20 +804,24 @@
       <h1>Getting the console ready</h1>
       <p class="setup-sub" id="setupHeadline">Checking Docker and SQL Server…</p>
       <form class="setup-form" id="setupCredentials" hidden>
+        <p class="setup-hint" id="setupCredIntro">
+          Choose the database name and the SQL Server <code>sa</code> password. These are used to create SQL Server and the database.
+        </p>
         <label>
-          User
-          <input id="setupUser" name="user" autocomplete="username" spellcheck="false" />
+          Database name
+          <input id="setupDatabase" name="database" spellcheck="false" placeholder="e.g. DRAP" autocomplete="off" />
         </label>
         <label>
-          Password
-          <input id="setupPassword" name="password" type="password" autocomplete="current-password" />
+          SQL password (sa)
+          <input id="setupPassword" name="password" type="password" autocomplete="new-password" placeholder="Set or enter the sa password" />
         </label>
         <label>
-          Database
-          <input id="setupDatabase" name="database" spellcheck="false" />
+          SQL login
+          <input id="setupUser" name="user" value="sa" autocomplete="username" spellcheck="false" />
         </label>
+        <p class="setup-hint">Password needs 8+ characters with upper, lower, number, and a symbol (SQL Server rule).</p>
         <p class="setup-hint setup-cred-error" id="setupCredError"></p>
-        <button class="btn primary" type="submit">Continue</button>
+        <button class="btn primary" type="submit">Create / continue</button>
       </form>
       <ol class="setup-steps" id="setupSteps">
         <li class="setup-step pending">

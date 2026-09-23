@@ -295,6 +295,10 @@ function setTab(tab) {
   document.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", el.dataset.tab === tab));
   document.querySelectorAll(".panel").forEach((el) => el.classList.toggle("active", el.id === `panel-${tab}`));
   if (tab === "structure") loadStructure();
+  if (tab === "databases") {
+    $("crumbs").textContent = "Databases";
+    loadDatabases();
+  }
   if (tab === "export") {
     $("crumbs").textContent = "Export backup";
     if (state.meta && state.meta.database) $("exportDatabase").value = state.meta.database;
@@ -302,6 +306,134 @@ function setTab(tab) {
   if (tab === "restore") {
     $("crumbs").textContent = "Restore backup";
     if (state.meta && state.meta.database) $("restoreDatabase").value = state.meta.database;
+  }
+}
+
+async function refreshAfterDatabaseChange() {
+  state.schema = null;
+  state.table = null;
+  state.page = 1;
+  state.sort = "";
+  state.dir = "asc";
+  state.q = "";
+  if ($("rowSearch")) $("rowSearch").value = "";
+  await loadMeta();
+  await loadObjects();
+  renderOverview();
+  if (state.meta && state.meta.database) {
+    if ($("exportDatabase")) $("exportDatabase").value = state.meta.database;
+    if ($("restoreDatabase")) $("restoreDatabase").value = state.meta.database;
+  }
+}
+
+function renderDatabases(data) {
+  const current = data.current || (state.meta && state.meta.database) || "";
+  const databases = data.databases || [];
+  $("databasesStatus").textContent = databases.length
+    ? `${databases.length} database${databases.length === 1 ? "" : "s"} · active: ${current || "—"}`
+    : "No user databases yet. Create one above.";
+
+  if (!databases.length) {
+    $("databasesWrap").innerHTML = `<div class="empty">No user databases found.</div>`;
+    return;
+  }
+
+  const rows = databases
+    .map((db) => {
+      const active = db.name === current;
+      return `<tr>
+        <td>${escapeHtml(db.name)}${active ? ' <span class="pill pk">active</span>' : ""}</td>
+        <td>${db.size_mb != null ? escapeHtml(String(db.size_mb)) : "—"}</td>
+        <td>${escapeHtml(db.state || "—")}</td>
+        <td style="white-space:nowrap">
+          <button class="btn" type="button" data-db-use="${escapeHtml(db.name)}" ${active ? "disabled" : ""}>Open</button>
+          <button class="btn danger" type="button" data-db-delete="${escapeHtml(db.name)}">Delete</button>
+        </td>
+      </tr>`;
+    })
+    .join("");
+
+  $("databasesWrap").innerHTML = `<table>
+    <thead><tr><th>Name</th><th>Size (MB)</th><th>State</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+async function loadDatabases() {
+  $("databasesStatus").textContent = "Loading databases…";
+  $("databasesWrap").innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    const data = await api("/api/databases");
+    renderDatabases(data);
+  } catch (err) {
+    $("databasesStatus").textContent = err.message;
+    $("databasesWrap").innerHTML = `<div class="status-error">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function createDatabase() {
+  const name = $("newDatabaseName").value.trim();
+  const use = $("newDatabaseUse").checked;
+  if (!name) {
+    $("databasesStatus").textContent = "Enter a database name.";
+    $("newDatabaseName").focus();
+    return;
+  }
+  $("createDatabase").disabled = true;
+  $("databasesStatus").textContent = `Creating [${name}]…`;
+  try {
+    const data = await api("/api/databases", {
+      method: "POST",
+      body: JSON.stringify({ name, use }),
+    });
+    $("newDatabaseName").value = "";
+    renderDatabases(data);
+    if (use) await refreshAfterDatabaseChange();
+    $("databasesStatus").textContent = use
+      ? `Created and opened [${data.name}].`
+      : `Created [${data.name}].`;
+  } catch (err) {
+    $("databasesStatus").textContent = err.message;
+  } finally {
+    $("createDatabase").disabled = false;
+  }
+}
+
+async function useDatabase(name) {
+  $("databasesStatus").textContent = `Opening [${name}]…`;
+  try {
+    const data = await api("/api/databases/use", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    renderDatabases(data);
+    await refreshAfterDatabaseChange();
+    $("databasesStatus").textContent = `Opened [${data.name}].`;
+  } catch (err) {
+    $("databasesStatus").textContent = err.message;
+  }
+}
+
+async function deleteDatabase(name) {
+  if (
+    !window.confirm(
+      `Delete database [${name}] permanently?\n\nThis cannot be undone.`
+    )
+  ) {
+    return;
+  }
+  $("databasesStatus").textContent = `Deleting [${name}]…`;
+  try {
+    const data = await api(`/api/databases/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    renderDatabases(data);
+    await refreshAfterDatabaseChange();
+    $("databasesStatus").textContent = data.switchedTo && data.switchedTo !== name
+      ? `Deleted [${data.deleted}] and switched to [${data.switchedTo}].`
+      : `Deleted [${data.deleted}].`;
+  } catch (err) {
+    $("databasesStatus").textContent = err.message;
   }
 }
 
@@ -421,6 +553,24 @@ document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => setTab(tab.dataset.tab));
 });
 $("runSql").addEventListener("click", runQuery);
+$("createDatabase").addEventListener("click", createDatabase);
+$("newDatabaseName").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    createDatabase();
+  }
+});
+$("databasesWrap").addEventListener("click", (e) => {
+  const useBtn = e.target.closest("[data-db-use]");
+  if (useBtn) {
+    useDatabase(useBtn.getAttribute("data-db-use"));
+    return;
+  }
+  const deleteBtn = e.target.closest("[data-db-delete]");
+  if (deleteBtn) {
+    deleteDatabase(deleteBtn.getAttribute("data-db-delete"));
+  }
+});
 $("sql").addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
     e.preventDefault();
@@ -566,7 +716,7 @@ function renderSetup(data) {
   if (data.needsCredentials) {
     $("setupActions").innerHTML = "";
     const active = document.activeElement;
-    if (!form.contains(active)) $("setupUser").focus();
+    if (!form.contains(active)) $("setupDatabase").focus();
     return;
   }
   $("setupSteps").innerHTML = (data.steps || [])

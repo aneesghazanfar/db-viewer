@@ -102,6 +102,47 @@ function lastProgressLine(text) {
   return "";
 }
 
+function formatElapsed(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  if (mins <= 0) return `${secs}s`;
+  return `${mins}m ${secs}s`;
+}
+
+/** Turn raw `docker pull` lines into short, human status text. */
+function humanizePullProgress(rawLine) {
+  const line = String(rawLine || "").trim();
+  if (!line) return "";
+
+  if (/^Status:\s*Downloaded newer image/i.test(line)) {
+    return "SQL Server download finished";
+  }
+  if (/^Status:\s*Image is up to date/i.test(line)) {
+    return "SQL Server image is up to date";
+  }
+  if (/Downloading\s*\[/i.test(line) || /\bDownloading\b/i.test(line)) {
+    const sizes = line.match(/([\d.]+(?:[KMGT]B)?)\s*\/\s*([\d.]+(?:[KMGT]B)?)/i);
+    if (sizes) return `Downloading SQL Server… ${sizes[1]} / ${sizes[2]}`;
+    return "Downloading SQL Server…";
+  }
+  if (/\bExtracting\b/i.test(line)) return "Unpacking SQL Server image…";
+  if (/\bVerifying Checksum\b/i.test(line)) return "Verifying download…";
+  if (/\bDownload complete\b/i.test(line)) return "Layer downloaded…";
+  if (/\bPull complete\b/i.test(line)) return "Finishing SQL Server image…";
+  if (/\bPulling fs layer\b/i.test(line)) return "Fetching SQL Server layers…";
+  if (/\bWaiting\b/i.test(line)) return "Waiting on Docker download…";
+  if (/\bAlready exists\b/i.test(line)) {
+    return "Reusing saved layers… finishing download";
+  }
+  // Hide opaque layer ids like "77dbfa1fd1ae: …"
+  if (/^[0-9a-f]{8,}:\s*/i.test(line)) {
+    return "Downloading SQL Server…";
+  }
+  if (line.length > 90) return `${line.slice(0, 87)}…`;
+  return line;
+}
+
 function getStatus() {
   return status;
 }
@@ -184,18 +225,56 @@ async function ensureCredentials() {
     status.needsCredentials = false;
     return;
   }
-  await waitForCredentialsForm("Enter user, password, and database");
+  await waitForCredentialsForm(
+    "Enter a database name and set the SQL Server password"
+  );
+}
+
+function validateDatabaseName(name) {
+  const value = String(name || "").trim();
+  if (!value) throw new Error("Database name is required.");
+  if (value.length > 128) throw new Error("Database name is too long.");
+  if (!/^[A-Za-z_][A-Za-z0-9_$#@]*$/.test(value)) {
+    throw new Error(
+      "Database name must start with a letter or underscore and use only letters, numbers, _, $, #, or @."
+    );
+  }
+  const reserved = new Set(["master", "tempdb", "model", "msdb"]);
+  if (reserved.has(value.toLowerCase())) {
+    throw new Error(`"${value}" is a system database. Choose another name.`);
+  }
+  return value;
+}
+
+function validateSaPassword(password) {
+  const value = String(password || "");
+  if (value.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+  const checks = [
+    /[A-Z]/.test(value),
+    /[a-z]/.test(value),
+    /[0-9]/.test(value),
+    /[^A-Za-z0-9]/.test(value),
+  ].filter(Boolean).length;
+  if (checks < 3) {
+    throw new Error(
+      "Password must include at least 3 of: uppercase, lowercase, number, symbol."
+    );
+  }
+  return value;
+}
+
+function quoteIdent(name) {
+  return `[${String(name).replace(/]/g, "]]")}]`;
 }
 
 function saveCredentials({ user, password, database }) {
   const next = {
-    user: String(user || "").trim(),
-    password: String(password || ""),
-    database: String(database || "").trim(),
+    user: String(user || "").trim() || "sa",
+    password: validateSaPassword(password),
+    database: validateDatabaseName(database),
   };
-  if (!next.user || !next.password || !next.database) {
-    throw new Error("User, password, and database are required.");
-  }
   fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(next, null, 2) + "\n");
   dbCreds = next;
   status.needsCredentials = false;
@@ -204,6 +283,21 @@ function saveCredentials({ user, password, database }) {
     credentialsWaiter = null;
     done();
   }
+}
+
+function setActiveDatabase(database) {
+  const creds = getCredentials();
+  if (!creds || !creds.password) {
+    throw new Error("SQL Server credentials are not configured yet.");
+  }
+  const next = {
+    user: creds.user || "sa",
+    password: creds.password,
+    database: validateDatabaseName(database),
+  };
+  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(next, null, 2) + "\n");
+  dbCreds = next;
+  return { ...next };
 }
 
 function dockerDownloadUrl() {
@@ -555,33 +649,54 @@ async function ensureSqlServerImage() {
     return;
   }
 
-  setStep("sql-image", "running", "Downloading SQL Server…");
+  const startedAt = Date.now();
+  let baseDetail =
+    "Downloading SQL Server (~2 GB). First run can take several minutes…";
+  const publish = (detail) => {
+    if (detail) baseDetail = detail;
+    setStep(
+      "sql-image",
+      "running",
+      `${baseDetail} (${formatElapsed(Date.now() - startedAt)})`
+    );
+  };
+
+  publish(baseDetail);
   const child = spawn(dockerCmd, ["pull", ...sqlPlatformArgs(), SQL_IMAGE], {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   const onChunk = (chunk) => {
     const line = lastProgressLine(String(chunk));
-    if (line) setStep("sql-image", "running", line);
+    const friendly = humanizePullProgress(line);
+    if (friendly) publish(friendly);
   };
   child.stdout.on("data", onChunk);
   child.stderr.on("data", onChunk);
 
-  const code = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  });
+  const heartbeat = setInterval(() => publish(), 2000);
+
+  let code;
+  try {
+    code = await new Promise((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+  } finally {
+    clearInterval(heartbeat);
+  }
+
   if (code !== 0) {
-    throw new Error("Failed to download SQL Server image.");
+    throw new Error(
+      "Failed to download SQL Server image. Check Docker Desktop and your network, then retry."
+    );
   }
   setStep("sql-image", "ok", "SQL Server downloaded");
 }
 
 function createSqlServerContainer() {
-  const password = dbCreds.password;
-  if (!password) {
-    throw new Error("Database password is required to create the SQL Server container.");
-  }
+  const password = validateSaPassword(dbCreds.password);
+  validateDatabaseName(dbCreds.database);
 
   setStep("sql-start", "running", `Creating container "${CONTAINER}"…`);
   const created = run(dockerCmd, [
@@ -698,19 +813,21 @@ async function loginReady() {
 
 async function waitForSqlServer() {
   const deadline = Date.now() + SQL_WAIT_MS;
+  const startedAt = Date.now();
 
   while (Date.now() < deadline) {
+    const elapsed = formatElapsed(Date.now() - startedAt);
     if (!(await portOpen())) {
       setStep(
         "sql-start",
         "running",
-        `Waiting for SQL Server on ${HOST}:${PORT}…`
+        `Starting SQL Server on ${HOST}:${PORT}… first boot can take a few minutes (${elapsed})`
       );
       await sleep(2000);
       continue;
     }
 
-    setStep("sql-start", "running", "Checking the SQL Server login…");
+    setStep("sql-start", "running", `Checking the SQL Server login… (${elapsed})`);
     const result = await loginReady();
     if (result === true) {
       setStep("sql-start", "ok", "SQL Server is running");
@@ -725,13 +842,61 @@ async function waitForSqlServer() {
     }
 
     const message = result && result.message ? result.message : String(result);
-    setStep("sql-start", "running", `SQL Server is not ready yet (${message})`);
+    setStep(
+      "sql-start",
+      "running",
+      `SQL Server is warming up… (${elapsed}) ${message}`
+    );
     await sleep(3000);
   }
 
   throw new Error(
     `SQL Server did not become ready on ${HOST}:${PORT} in time.`
   );
+}
+
+async function ensureTargetDatabase() {
+  const name = validateDatabaseName(dbCreds.database);
+  setStep("sql-ready", "running", `Creating database "${name}" if needed…`);
+
+  const pool = new sql.ConnectionPool({
+    user: dbCreds.user || "sa",
+    password: dbCreds.password,
+    server: HOST,
+    port: PORT,
+    database: "master",
+    options: {
+      encrypt: String(process.env.DB_ENCRYPT || "false").toLowerCase() === "true",
+      trustServerCertificate:
+        String(process.env.DB_TRUST_SERVER_CERTIFICATE || "true").toLowerCase() ===
+        "true",
+      enableArithAbort: true,
+    },
+    connectionTimeout: 15000,
+    requestTimeout: 60000,
+    pool: { max: 1, min: 0, idleTimeoutMillis: 1000 },
+  });
+
+  try {
+    await pool.connect();
+    const exists = await pool
+      .request()
+      .input("name", sql.NVarChar(128), name)
+      .query("SELECT DB_ID(@name) AS id");
+    if (!exists.recordset[0] || exists.recordset[0].id == null) {
+      setStep("sql-ready", "running", `Creating database "${name}"…`);
+      await pool.request().query(`CREATE DATABASE ${quoteIdent(name)}`);
+      setStep("sql-ready", "running", `Database "${name}" created`);
+    } else {
+      setStep("sql-ready", "running", `Database "${name}" already exists`);
+    }
+  } finally {
+    try {
+      await pool.close();
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 async function runSetup() {
@@ -747,6 +912,7 @@ async function runSetup() {
     await ensureSqlServerImage();
     startSqlServerContainer();
     await waitForSqlServer();
+    await ensureTargetDatabase();
     setStep("sql-ready", "running", "Connecting to the database…");
     if (typeof onReady === "function") {
       try {
@@ -786,11 +952,14 @@ function retry() {
 
 module.exports = {
   applyCredentialsTo,
+  getCredentials,
   getStatus,
   isReady,
   openDockerDownload,
   openUrl,
   retry,
   saveCredentials,
+  setActiveDatabase,
   start,
+  validateDatabaseName,
 };
