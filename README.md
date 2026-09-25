@@ -28,7 +28,7 @@ The console opens at [http://127.0.0.1:5050](http://127.0.0.1:5050) (localhost o
 
 ### First run
 
-1. Enter a **database name** (for example `DRAP`).
+1. Enter a **database name** (for example `DB`).
 2. Set the SQL Server **`sa` password**.
 3. Leave SQL login as `sa` (default).
 4. Wait while the app:

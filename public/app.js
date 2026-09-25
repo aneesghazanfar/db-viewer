@@ -37,6 +37,45 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+const APP_TITLE = "DRAP Database Console";
+
+function tableHash(schema, table) {
+  return `#${encodeURIComponent(schema)}/${encodeURIComponent(table)}`;
+}
+
+function readTableFromLocation() {
+  const raw = location.hash.replace(/^#/, "");
+  const slash = raw.indexOf("/");
+  if (slash <= 0 || slash === raw.length - 1) return null;
+  try {
+    const schema = decodeURIComponent(raw.slice(0, slash));
+    const table = decodeURIComponent(raw.slice(slash + 1));
+    if (!schema || !table) return null;
+    return { schema, table };
+  } catch {
+    return null;
+  }
+}
+
+function objectExists(schema, table) {
+  return state.objects.some((obj) => obj.schema_name === schema && obj.object_name === table);
+}
+
+function setPageTitle() {
+  document.title = state.table ? `${state.table}` : APP_TITLE;
+}
+
+function writeTableHash(schema, table) {
+  const current = readTableFromLocation();
+  if (current && current.schema === schema && current.table === table) return;
+  history.pushState(null, "", tableHash(schema, table));
+}
+
+function clearTableHash() {
+  if (!location.hash) return;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
 function displayValue(value) {
   if (value === null || value === undefined) {
     return { html: '<span class="null">NULL</span>', raw: "NULL" };
@@ -73,10 +112,10 @@ function renderObjects() {
                 : "";
             const count = obj.object_type === "VIEW" ? "view" : fmt(obj.row_count);
             const typeClass = obj.object_type === "VIEW" ? "type-view" : "";
-            return `<button class="obj ${active}" data-schema="${escapeHtml(obj.schema_name)}" data-table="${escapeHtml(obj.object_name)}">
+            return `<a class="obj ${active}" href="${tableHash(obj.schema_name, obj.object_name)}" data-schema="${escapeHtml(obj.schema_name)}" data-table="${escapeHtml(obj.object_name)}">
             <span class="name">${escapeHtml(obj.object_name)}</span>
             <span class="badge ${typeClass}">${count}</span>
-          </button>`;
+          </a>`;
           })
           .join("");
         return `<div class="schema-label">${escapeHtml(schema)}</div>${rows}`;
@@ -316,6 +355,8 @@ async function refreshAfterDatabaseChange() {
   state.sort = "";
   state.dir = "asc";
   state.q = "";
+  clearTableHash();
+  setPageTitle();
   if ($("rowSearch")) $("rowSearch").value = "";
   await loadMeta();
   await loadObjects();
@@ -437,7 +478,22 @@ async function deleteDatabase(name) {
   }
 }
 
-function selectObject(schema, table) {
+function clearOpenTable(options = {}) {
+  state.schema = null;
+  state.table = null;
+  state.page = 1;
+  state.sort = "";
+  state.dir = "asc";
+  state.q = "";
+  if ($("rowSearch")) $("rowSearch").value = "";
+  if (!options.skipHash) clearTableHash();
+  setPageTitle();
+  renderObjects();
+  renderOverview();
+  if (state.tab === "structure") setTab("data");
+}
+
+function selectObject(schema, table, options = {}) {
   state.schema = schema;
   state.table = table;
   state.page = 1;
@@ -445,6 +501,8 @@ function selectObject(schema, table) {
   state.dir = "asc";
   state.q = "";
   $("rowSearch").value = "";
+  if (!options.skipHash) writeTableHash(schema, table);
+  setPageTitle();
   renderObjects();
   renderOverview();
   if (state.tab === "structure") loadStructure();
@@ -452,6 +510,16 @@ function selectObject(schema, table) {
     setTab("data");
     loadRows();
   }
+}
+
+function openTableFromLocation() {
+  const target = readTableFromLocation();
+  if (!target || !objectExists(target.schema, target.table)) {
+    if (state.table) clearOpenTable({ skipHash: true });
+    return;
+  }
+  if (state.schema === target.schema && state.table === target.table) return;
+  selectObject(target.schema, target.table, { skipHash: true });
 }
 
 function openModal(title, body) {
@@ -492,9 +560,13 @@ document.addEventListener("keydown", (e) => {
 });
 
 $("objectList").addEventListener("click", (e) => {
-  const btn = e.target.closest(".obj");
-  if (btn) selectObject(btn.dataset.schema, btn.dataset.table);
+  const link = e.target.closest("a.obj");
+  if (!link) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  selectObject(link.dataset.schema, link.dataset.table);
 });
+window.addEventListener("popstate", openTableFromLocation);
 $("objectSearch").addEventListener("input", renderObjects);
 $("reloadBtn").addEventListener("click", loadRows);
 $("pageSize").addEventListener("change", () => {
@@ -602,7 +674,10 @@ async function runRestore() {
     }
     const text = await streamJobLog(res, $("restoreLog"));
     if (text.includes("\nDONE")) {
+      state.schema = null;
       state.table = null;
+      clearTableHash();
+      setPageTitle();
       await loadMeta();
       await loadObjects();
     }
@@ -748,6 +823,7 @@ async function initApp() {
   try {
     await loadMeta();
     await loadObjects();
+    openTableFromLocation();
   } catch (err) {
     $("objectList").innerHTML = `<div class="schema-label">${escapeHtml(err.message)}</div>`;
     $("overview").innerHTML = `<div class="status-error">${escapeHtml(err.message)}</div>`;
